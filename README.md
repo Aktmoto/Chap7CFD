@@ -1,2 +1,2 @@
-# AndersonChap7CFD
+# Chap7CFD
 juliaで書いたやつ
