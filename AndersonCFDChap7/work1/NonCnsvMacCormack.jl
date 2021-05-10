@@ -3,6 +3,13 @@ module NonCnsvMacCormack
     htSpecRatio = 1.4
     courant = 0.5
 
+    mutable struct AverageDif
+        ave_dρ::Vector{Float64}
+        ave_dv::Vector{Float64}
+        ave_dt::Vector{Float64}
+        AverageDif(length) = new(zeros(length),zeros(length),zeros(length))
+    end
+
     mutable struct PrimitiveValuesWithStepNum
         step:: Int64
         p::Vector{Float64}
@@ -10,6 +17,8 @@ module NonCnsvMacCormack
         v::Vector{Float64}
         t::Vector{Float64}
         ρ::Vector{Float64}
+        aveDif::AverageDif
+        PrimitiveValuesWithStepNum(count,length) = new(count,zeros(length),zeros(length),zeros(length),zeros(length),zeros(length),AverageDif(length))
     end
 
     mutable struct Dif
@@ -22,11 +31,6 @@ module NonCnsvMacCormack
         pre_dv::Vector{Float64}
         pre_dt::Vector{Float64}
     end
-    mutable struct AverageDif
-        ave_dρ::Vector{Float64}
-        ave_dv::Vector{Float64}
-        ave_dt::Vector{Float64}
-    end
     mutable struct PredictedValue
         v::Vector{Float64}
         t::Vector{Float64}
@@ -34,21 +38,22 @@ module NonCnsvMacCormack
     end
 
     # countは今何回目かということ.
-    function sub_superOneStep(deltax::Float64, count::Int64, length::Int64, ρ::Vector{Float64}, v::Vector{Float64}, t::Vector{Float64}, A::Vector{Float64})
-        next::PrimitiveValuesWithStepNum = PrimitiveValuesWithStepNum(count, zeros(length), zeros(length), zeros(length),zeros(length),zeros(length))
+    function sub_superOneStep(deltax::Float64, count::Int64, length::Int64, ρ::Vector{Float64}, v::Vector{Float64}, t::Vector{Float64}, A::Vector{Float64},courant::Float64)
+        next::PrimitiveValuesWithStepNum = PrimitiveValuesWithStepNum(count,length)
         dif::Dif = finiteDif(deltax, length,ρ,v,t,A)
-        timeStep::Float64 = calcTimeStep(length,deltax,v,t)
+        timeStep::Float64 = calcTimeStepWithCourant(length,deltax,v,t,courant)
         preValue::PredictedValue = predict(length,ρ,v,t,dif,timeStep)
         preDif::PredictedDif = correctDif(deltax,length,preValue,A)
         aveDif::AverageDif = averageDif(length,dif,preDif)
         calcNextTimeValue(length,next,aveDif,timeStep,ρ,v,t)
         sub_superCalcEdgeValue(length, next)
         sub_superCalcPressureAndMach(length, next)
+        next.aveDif = aveDif
         return next
     end
 
     function sub_subOneStep(deltax::Float64, count::Int64, length::Int64, ρ::Vector{Float64}, v::Vector{Float64}, t::Vector{Float64}, A::Vector{Float64}, specificBackPressure::Float64)
-        next::PrimitiveValuesWithStepNum = PrimitiveValuesWithStepNum(count, zeros(length), zeros(length), zeros(length),zeros(length),zeros(length))
+        next::PrimitiveValuesWithStepNum = PrimitiveValuesWithStepNum(count,length)
         dif::Dif = finiteDif(deltax, length,ρ,v,t,A)
         timeStep::Float64 = calcTimeStep(length,deltax,v,t)
         preValue::PredictedValue = predict(length,ρ,v,t,dif,timeStep)
@@ -149,7 +154,7 @@ module NonCnsvMacCormack
     end
 
     function averageDif(length::Int64, x::Dif, y::PredictedDif)::AverageDif
-        aveDif::AverageDif = AverageDif(zeros(length),zeros(length),zeros(length))
+        aveDif::AverageDif = AverageDif(length)
          for i in 2:1:length-1
             aveDif.ave_dρ[i] = ((x.dρ[i]+y.pre_dρ[i])/2)
             aveDif.ave_dv[i] = ((x.dv[i]+y.pre_dv[i])/2)
@@ -167,7 +172,15 @@ module NonCnsvMacCormack
         end
         return timeStep
     end
-
+    
+    function calcTimeStepWithCourant(length::Int64,deltax::Float64,v::Vector{Float64}, t::Vector{Float64}, specificCourant::Float64)::Float64
+        timeStep= Inf
+        for i in 2:1:length-1
+            tmp= specificCourant*deltax/(sqrt(t[i])+v[i])
+            timeStep = ifelse(tmp<timeStep, tmp, timeStep)
+        end
+        return timeStep
+    end
     function calcNextTimeValue(length::Int64,
         next::PrimitiveValuesWithStepNum, 
         aveDif::AverageDif,
