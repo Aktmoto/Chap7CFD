@@ -27,11 +27,12 @@ module CnsvMacCormack
 
     mutable struct SolutionVectorsWithStepAndPrim
         step::Int64
+        timeStep::Float64
         u1::Vector{Float64}
         u2::Vector{Float64}
         u3::Vector{Float64}
         primitive::DecodedPrimitiveValues
-        SolutionVectorsWithStepAndPrim(length) = new(0,zeros(length),zeros(length),zeros(length),DecodedPrimitiveValues(length))
+        SolutionVectorsWithStepAndPrim(length) = new(0,0,zeros(length),zeros(length),zeros(length),DecodedPrimitiveValues(length))
     end
 
 
@@ -160,6 +161,64 @@ module CnsvMacCormack
         preSolution)
         #境界条件
         sub_subCalcEdgeValue(length,next,A,specificPressure)
+        CalcPrimitive(length,next,A)
+        return next
+    end
+    # 衝撃波管
+    struct ShockTubeBoundary
+        u1_1::Float64
+        u2_1::Float64
+        u3_1::Float64
+        u1_N::Float64
+        u2_N::Float64
+        u3_N::Float64
+        ShockTubeBoundary(u1_1,u2_1,u3_1,u1_N,u2_N,u3_N) = new(u1_1,u2_1,u3_1,u1_N,u2_N,u3_N)
+    end
+
+    function shockTubeWithArtificialViscocity(deltax::Float64, 
+        count::Int64, 
+        length::Int64,
+        boundary::ShockTubeBoundary,
+        ρ::Vector{Float64},#ソースベクターを求める際に必要
+        t::Vector{Float64},
+        v::Vector{Float64},
+        p::Vector{Float64},
+        u1::Vector{Float64}, 
+        u2::Vector{Float64}, 
+        u3::Vector{Float64}, 
+        A::Vector{Float64},
+        Cx::Float64)::SolutionVectorsWithStepAndPrim
+        next::SolutionVectorsWithStepAndPrim = SolutionVectorsWithStepAndPrim(length)
+        next.step = count
+        
+        fluxAndSource::FluxAndSourceVector = calcFluxAndSource(length,deltax,u1,u2,u3,ρ,t,A)
+        timeStep::Float64 = NonCnsvMacCormack.calcTimeStep(length,deltax,v,t)
+        next.timeStep = timeStep
+        #予測子
+        dif::Dif = calcDif(length,deltax,fluxAndSource)
+        preSolution::PredictedSolutionVector = calcPreSolutionWithArtificialViscosity(length,u1,u2,u3,dif,timeStep,Cx,p)
+        prePrimitive::PredictedPrimitiveValue = calcPrePrimitive(length,preSolution,A)
+        preFluxAndSource::FluxAndSourceVector = calcFluxAndSource(length,deltax,preSolution.pre_u1,
+        preSolution.pre_u2,
+        preSolution.pre_u3,
+        prePrimitive.pre_ρ,
+        prePrimitive.pre_t,
+        A)
+        #修正子
+        preDif::PredictedDif = calcPreDif(length,deltax,preFluxAndSource,prePrimitive,A)
+        aveDif::AverageDif = calcAveDif(length,dif,preDif)
+        calcNextTimeValueWithArtificialViscosity(length,
+        next,
+        u1,
+        u2,
+        u3,
+        aveDif,
+        timeStep,
+        Cx,
+        prePrimitive.pre_ρ .* prePrimitive.pre_t,
+        preSolution)
+        #境界条件
+        CalcShockTubeEdgeValue(length,next,A,boundary)
         CalcPrimitive(length,next,A)
         return next
     end
@@ -367,4 +426,17 @@ module CnsvMacCormack
         next.u2[length] = (2*next.u2[length-1]-next.u2[length-2])
         next.u3[length] = specificPressure*A[length]/(htSpecRatio-1)+htSpecRatio/2*next.u2[length]*next.primitive.v[length]
     end
+
+    function CalcShockTubeEdgeValue(length::Int64,next::SolutionVectorsWithStepAndPrim,A::Vector{Float64},boundary::ShockTubeBoundary)
+        #流入側
+        next.u1[1] = boundary.u1_1 #ρ[1]=1のため
+        next.u2[1] = boundary.u2_1
+        next.u3[1] = boundary.u3_1
+        #流出側
+        next.u1[length] = boundary.u1_N
+        next.u2[length] = boundary.u2_N
+        next.u3[length] = boundary.u3_N
+    end
+
+    #
 end

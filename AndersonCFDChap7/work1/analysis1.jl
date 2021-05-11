@@ -8,6 +8,7 @@ IJulia v1.23.2
 Plots v1.13.2 
 PyCall v1.92.3
 PyPlot v2.9.0
+VSCOdeなら実行はコード上でshift+enter
 =#
 
 #=
@@ -473,9 +474,137 @@ println("マッハ"*string(roundTo_3digits(totalResult7_6[see].primitive.M)))
 graphMaker.makeMultiLineGraph(x7_6, "位置","圧力","7_6pressureBig",(totalResult7_6_Cx1[totalStep7_6].primitive.p,"Cx=0.0"),(totalResult7_6_Cx2[totalStep7_6].primitive.p,"Cx=0.1"),(totalResult7_6_Cx3[totalStep7_6].primitive.p,"Cx=0.2"),(totalResult7_6_Cx4[totalStep7_6].primitive.p,"Cx=0.3"))
 graphMaker.makeMultiLineGraph(x7_6, "位置","流量","7_6massFlow",(totalResult7_6_Cx1[totalStep7_6].u2,"Cx=0.0"),(totalResult7_6_Cx2[totalStep7_6].u2,"Cx=0.1"),(totalResult7_6_Cx3[totalStep7_6].u2,"Cx=0.2"),(totalResult7_6_Cx4[totalStep7_6].u2,"Cx=0.3"))
 
+
+#FVS
+
+
+
 #endregion 7-6
 
 #region prob2
+
+#初期条件
+ductLength2 = 1 #正規化されている
+pointLength2 = 101
+deltax2 = ductLength2/ (pointLength2-1)
+
+function density2(x::Vector{Float64})::Vector{Float64}
+    result = zeros(pointLength2)
+    for i in 1:1:pointLength2
+        if x[i] <= 0.5
+            result[i] = 1.0
+        else
+            result[i] =1/6
+        end
+    end
+    return result
+end
+
+function temperature2(x::Vector{Float64})::Vector{Float64}
+    result = zeros(pointLength2)
+    for i in 1:1:pointLength2
+        if x[i] <= 0.5
+            result[i] =1.0
+        else
+            result[i]= 1.2
+        end
+    end
+    return result
+end
+x2 = [i for i in 0:deltax2:ductLength2]
+ρ2 = density2(x2)
+v2 = [0.0 for i in 1:1:pointLength2]
+t2 = temperature2(x2)
+A2 = [1.0 for i in 1:1:pointLength2]#断面積は一定なので全て1で統一
+p2 = ρ2 .* t2
+const Cx2_1 = 0.0
+const Cx2_2 = 0.1
+const Cx2_3 = 0.2
+const Cx2_4 = 0.3
+
+u1_Prob2 = CnsvMacCormack.encodeTo_u1(ρ2,A2)
+u2_Prob2 = CnsvMacCormack.encodeTo_u2(ρ2,A2,v2)
+u3_Prob2 = CnsvMacCormack.encodeTo_u3(ρ2,A2,v2,t2)
+
+boundary = CnsvMacCormack.ShockTubeBoundary(
+u1_Prob2[1],
+u2_Prob2[1],
+u3_Prob2[1],
+u1_Prob2[pointLength2],
+u2_Prob2[pointLength2],
+u3_Prob2[pointLength2]
+)
+totalStep_Prob2 = 300
+#境界条件は膨張波と圧縮波は端点まではつたわらないとして, 初期条件の値をそのまま用いる.
+function shockTubeSolutionWith(Cx::Float64)::Vector{CnsvMacCormack.SolutionVectorsWithStepAndPrim}
+    one = CnsvMacCormack.shockTubeWithArtificialViscocity(deltax2,
+                                1,
+                                pointLength2,
+                                boundary,
+                                ρ2,
+                                t2,
+                                v2,
+                                p2,
+                                u1_Prob2,
+                                u2_Prob2,
+                                u3_Prob2,
+                                A2,
+                                Cx
+                                )
+                                
+    totalResult = Vector{CnsvMacCormack.SolutionVectorsWithStepAndPrim}()
+    push!(totalResult,one)
+
+    let
+        prev = one
+        for i in 2:1:totalStep_Prob2
+            next = CnsvMacCormack.shockTubeWithArtificialViscocity(deltax,
+                                i,
+                                pointLength2,
+                                boundary,
+                                prev.primitive.ρ,
+                                prev.primitive.t,
+                                prev.primitive.v,
+                                prev.primitive.p,
+                                prev.u1,
+                                prev.u2,
+                                prev.u3,
+                                A2,
+                                Cx)
+            push!(totalResult,next)
+            prev = next
+        end
+    end
+    return totalResult
+end
+totalResultProb2_Cx2_3 = shockTubeSolutionWith(Cx2_3)
+totalResultProb2_Cx2_4 = shockTubeSolutionWith(Cx2_4)
+totalResultProb2_Cx2_2 = shockTubeSolutionWith(Cx2_2)
+
+#無次元化した際の指標
+tubeLength = 0.2 # m
+P0 = 500.0*10^3 #Pa
+ρ0 = 6.0 #kg/m^3
+T0 = P0/ρ0/287 #kg
+a0 = sqrt(htSpecRatio*287*T0) #m/s
+function dimensionalize(totalStep::Int64,result::Vector{CnsvMacCormack.SolutionVectorsWithStepAndPrim})::Vector{CnsvMacCormack.SolutionVectorsWithStepAndPrim}
+    for i in 1:1:totalStep
+        result[i].primitive.ρ *= ρ0 
+        result[i].primitive.p *= P0 
+        result[i].primitive.v *= a0
+        result[i].timeStep *= tubeLength/a0
+    end
+    return result
+end
+x2 = x2 .- [0.5 for i in 1:1:pointLength2]
+x2 *= tubeLength #L = 0.2 m
+
+#= gifファイルの出力
+graphMaker.makeShockAnimation(x2,totalStep_Prob2,"Cx23",dimensionalize(totalStep_Prob2,totalResultProb2_Cx2_3))
+graphMaker.makeShockAnimation(x2,totalStep_Prob2,"Cx24",dimensionalize(totalStep_Prob2,totalResultProb2_Cx2_4))
+graphMaker.makeShockAnimation(x2,totalStep_Prob2,"Cx22",dimensionalize(totalStep_Prob2,totalResultProb2_Cx2_2))
+=#
+
 #endregion
 
 #endregion
